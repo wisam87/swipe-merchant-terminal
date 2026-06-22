@@ -279,13 +279,13 @@ export default function PayPage() {
       .catch(() => setQrSrc(""));
   }, [step, payment?.id, payment?.qr_svg, payment?.qr_emv, payment?.qr_data]);
 
-  // Subscribe to Server-Sent Events for live status updates, with a polling
-  // fallback if the stream connection can't be established.
+  // Watch for payment completion by polling the payment-status endpoint
+  // (GET /api/v1/payments/{id} via our proxy). The SSE stream isn't working
+  // upstream yet, so it's commented out below and ready to re-enable later.
   useEffect(() => {
     if (step !== "qr" || !payment?.id) return;
     const id = payment.id;
     let cancelled = false;
-    let es: EventSource | null = null;
     let pollId: ReturnType<typeof setInterval> | null = null;
 
     const finish = (p: Partial<Payment> & { status?: PaymentStatus }) => {
@@ -293,63 +293,42 @@ export default function PayPage() {
       if (applyStatus(p)) cleanup();
     };
 
-    const handle = (raw: string) => {
-      let data: unknown;
+    const tick = async () => {
       try {
-        data = JSON.parse(raw);
+        const res = await fetch(`/api/payments/${id}`, { cache: "no-store" });
+        if (!res.ok) return;
+        finish((await res.json()) as Payment);
       } catch {
-        return; // keep-alive / comment line
+        /* swallow polling errors */
       }
-      // The proxy normalizes every event to { status, reference }.
-      const d = data as { status?: PaymentStatus; reference?: string };
-      finish({ status: d.status, reference: d.reference });
-    };
-
-    // Fallback poll uses the payment status endpoint — it's the only source
-    // that returns the real `reference` (and status) before/after the customer
-    // pays. The transactions endpoint can't be used until that reference exists.
-    const startPolling = () => {
-      if (pollId || cancelled) return;
-      pollId = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/payments/${id}`, { cache: "no-store" });
-          if (!res.ok) return;
-          finish((await res.json()) as Payment);
-        } catch {
-          /* swallow polling errors */
-        }
-      }, 2500);
     };
 
     function cleanup() {
-      es?.close();
-      es = null;
       if (pollId) {
         clearInterval(pollId);
         pollId = null;
       }
     }
 
-    try {
-      es = new EventSource(`/api/payments/${id}/stream`);
-      es.onmessage = (ev) => handle(ev.data);
-      es.onerror = () => {
-        // EventSource auto-reconnects, but if the proxy returned an error the
-        // browser keeps failing — fall back to polling and let the user know
-        // the manual recheck is available.
-        if (es && es.readyState === EventSource.CLOSED) {
-          es = null;
-          if (!cancelled) {
-            setStatusNote(
-              "Live updates unavailable — use “Recheck status” to confirm payment.",
-            );
-          }
-          startPolling();
-        }
-      };
-    } catch {
-      startPolling();
-    }
+    // Poll immediately, then every 2.5s while the QR is shown.
+    tick();
+    pollId = setInterval(tick, 2500);
+
+    // --- SSE stream (disabled until the upstream stream is fixed) -------------
+    // Re-enable this block to switch from polling to live Server-Sent Events.
+    // The proxy normalizes each frame to `{ status, reference }`.
+    //
+    // const handle = (raw: string) => {
+    //   let data: unknown;
+    //   try { data = JSON.parse(raw); } catch { return; }
+    //   const d = data as { status?: PaymentStatus; reference?: string };
+    //   finish({ status: d.status, reference: d.reference });
+    // };
+    // const es = new EventSource(`/api/payments/${id}/stream`);
+    // es.onmessage = (ev) => handle(ev.data);
+    // es.onerror = () => { if (es.readyState === EventSource.CLOSED) es.close(); };
+    // (remember to es.close() in cleanup())
+    // -------------------------------------------------------------------------
 
     return () => {
       cancelled = true;

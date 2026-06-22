@@ -199,11 +199,27 @@ export async function createPayment(input: {
     }),
   });
 
+  // Read the body as raw text first and dump it EXACTLY as api.swipe.mv sent it
+  // — before any parsing or decoration — so the dev-server logs show the real,
+  // unmodified upstream response.
+  const text = await res.text();
+  let keyLine = "";
+  try {
+    keyLine = `keys present: ${Object.keys(JSON.parse(text)).join(", ")}\n`;
+  } catch {
+    /* non-JSON body */
+  }
+  console.log(
+    `\n===== [swipe] RAW create-payment response from api.swipe.mv (HTTP ${res.status}) =====\n` +
+      keyLine +
+      text +
+      `\n===== [swipe] end raw response =====\n`,
+  );
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     throw new Error(summarizeError("Create payment failed", res.status, text));
   }
-  return withQr((await res.json()) as PaymentResponse);
+  return withQr(JSON.parse(text) as PaymentResponse);
 }
 
 export async function getPayment(paymentId: string): Promise<PaymentResponse> {
