@@ -3,6 +3,23 @@ import { gunzipSync } from "node:zlib";
 
 export type PaymentStatus = "PENDING" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 
+export type TransactionResponse = {
+  id: string;
+  reference: string;
+  amount: number;
+  currency: string;
+  type?: string;
+  status: PaymentStatus | string;
+  description?: string;
+  gross_amount?: number;
+  net_amount?: number;
+  fee_amount?: number;
+  original_amount?: number;
+  created_at?: string;
+};
+
+export class NotFoundError extends Error {}
+
 export type PaymentResponse = {
   id: string;
   amount: number;
@@ -112,6 +129,22 @@ function withQr(payment: PaymentResponse): PaymentResponse {
   return { ...payment, ...decodeQr(payment.qr_data) };
 }
 
+// The stream/webhook payload may be the payment object directly ({status,...})
+// or nested ({data:{status, transaction_code,...}, eventType}). Pull the status
+// and reference out of whichever shape we're handed.
+export function extractStatus(raw: unknown): { status?: string; reference?: string } {
+  if (!raw || typeof raw !== "object") return {};
+  const o = raw as Record<string, unknown>;
+  const inner =
+    o.data && typeof o.data === "object" ? (o.data as Record<string, unknown>) : o;
+  const status = (o.status ?? inner.status) as string | undefined;
+  const reference = (o.reference ??
+    inner.reference ??
+    inner.transaction_code ??
+    o.transaction_code) as string | undefined;
+  return { status, reference };
+}
+
 // Upstream errors can be large Cloudflare HTML blocks; collapse them to a short,
 // meaningful message for the UI and logs.
 function summarizeError(label: string, status: number, body: string): string {
@@ -187,6 +220,42 @@ export async function getPayment(paymentId: string): Promise<PaymentResponse> {
     throw new Error(summarizeError("Get payment failed", res.status, text));
   }
   return withQr((await res.json()) as PaymentResponse);
+}
+
+/**
+ * Look up a transaction by its reference (transaction code, e.g. ST26173J85YY).
+ * This is the authoritative status of the actual money movement, distinct from
+ * the payment request. Throws NotFoundError (404) when no transaction exists
+ * yet for the reference — i.e. the customer hasn't paid.
+ */
+export async function getTransaction(reference: string): Promise<TransactionResponse> {
+  if (isMock()) {
+    for (const { payment, createdAt } of mockStore.values()) {
+      if (payment.reference !== reference && payment.short_code !== reference) continue;
+      // Mirror the mock payment auto-complete (~8s) as a "transaction".
+      const completed = Date.now() - createdAt > 8000;
+      return {
+        id: payment.id,
+        reference,
+        amount: payment.amount,
+        currency: payment.currency,
+        type: "P2M",
+        status: completed ? "COMPLETED" : "PENDING",
+        created_at: payment.created_at,
+      };
+    }
+    throw new NotFoundError(`No transaction found for ${reference}`);
+  }
+
+  const res = await swipeFetch(`/api/v1/transactions/${encodeURIComponent(reference)}`);
+  if (res.status === 404) {
+    throw new NotFoundError(`No transaction found for ${reference}`);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(summarizeError("Get transaction failed", res.status, text));
+  }
+  return (await res.json()) as TransactionResponse;
 }
 
 /**

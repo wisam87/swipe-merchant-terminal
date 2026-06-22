@@ -100,24 +100,51 @@ export default function PayPage() {
   );
 
   // Manual status check — fallback for when the SSE stream can't deliver.
+  // Looks up the transaction by its reference (transaction code). The reference
+  // isn't known until the payment becomes a transaction, so bootstrap it from
+  // the payment status first when we don't have it yet.
   const recheck = useCallback(async () => {
     if (!payment?.id || checking) return;
     setChecking(true);
     setStatusNote("");
+    const waiting = "Not paid yet — still waiting for the customer.";
     try {
-      const res = await fetch(`/api/payments/${payment.id}`, { cache: "no-store" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error ?? `Status check failed (${res.status})`);
+      let reference = payment.reference;
+
+      if (!reference) {
+        const pr = await fetch(`/api/payments/${payment.id}`, { cache: "no-store" });
+        const pd = await pr.json().catch(() => ({}));
+        if (!pr.ok) throw new Error(pd?.error ?? `Status check failed (${pr.status})`);
+        if (applyStatus(pd as Payment)) return; // already terminal
+        reference = (pd as Payment).reference;
+        if (reference) setPayment((cur) => (cur ? { ...cur, reference } : cur));
       }
-      const terminal = applyStatus(data as Payment);
-      if (!terminal) setStatusNote("Not paid yet — still waiting for the customer.");
+
+      if (!reference) {
+        setStatusNote(waiting);
+        return;
+      }
+
+      const res = await fetch(`/api/transactions/${encodeURIComponent(reference)}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 404 || data?.status === "NOT_FOUND") {
+        setStatusNote(waiting);
+        return;
+      }
+      if (!res.ok) throw new Error(data?.error ?? `Status check failed (${res.status})`);
+      const terminal = applyStatus({
+        status: data.status as PaymentStatus,
+        reference: data.reference,
+      });
+      if (!terminal) setStatusNote(waiting);
     } catch (e) {
       setStatusNote(e instanceof Error ? e.message : "Status check failed");
     } finally {
       setChecking(false);
     }
-  }, [payment?.id, checking, applyStatus]);
+  }, [payment?.id, payment?.reference, checking, applyStatus]);
 
   const appendDigit = useCallback((d: string) => {
     setRaw((cur) => {
@@ -241,8 +268,9 @@ export default function PayPage() {
       } catch {
         return; // keep-alive / comment line
       }
-      const d = data as Payment & { data?: { status?: PaymentStatus } };
-      finish({ ...d, status: d.status ?? d.data?.status });
+      // The proxy normalizes every event to { status, reference }.
+      const d = data as { status?: PaymentStatus; reference?: string };
+      finish({ status: d.status, reference: d.reference });
     };
 
     const startPolling = () => {
