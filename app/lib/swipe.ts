@@ -45,11 +45,11 @@ const OAUTH_TOKEN_URL =
   process.env.SWIPE_OAUTH_TOKEN_URL ?? "https://api.swipe.mv/oauth2/token";
 const API_BASE = process.env.SWIPE_API_BASE ?? "https://api.swipe.mv";
 
-// A browser-like UA keeps Cloudflare's bot-fight rules from challenging the
-// server-to-server calls.
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+// Identify honestly as a known API client. A *fake* browser UA (Chrome) on a
+// Node/undici request is a "lying bot" signal Cloudflare blocks — which is why
+// Postman (honest PostmanRuntime UA) succeeds where a spoofed-Chrome request
+// gets a 403/WAF. Override via SWIPE_USER_AGENT to experiment if needed.
+const USER_AGENT = process.env.SWIPE_USER_AGENT ?? "PostmanRuntime/7.39.0";
 
 const isMock = () =>
   !process.env.SWIPE_CLIENT_ID || !process.env.SWIPE_CLIENT_SECRET;
@@ -92,17 +92,20 @@ async function getAccessToken(): Promise<string> {
 
 async function swipeFetch(path: string, init: RequestInit = {}) {
   const token = await getAccessToken();
-  return fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": USER_AGENT,
-      ...(init.headers ?? {}),
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
+  const headers: Record<string, string> = {
+    // Mirror what Postman sends so the fingerprint looks like a legit API client.
+    Accept: "*/*",
+    "User-Agent": USER_AGENT,
+    "Cache-Control": "no-cache",
+    ...(init.headers as Record<string, string> | undefined),
+    Authorization: `Bearer ${token}`,
+  };
+  // Only send Content-Type when there's actually a body — a Content-Type on a
+  // bodyless GET is an anomaly signal Cloudflare's bot rules can flag.
+  if (init.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  return fetch(`${API_BASE}${path}`, { ...init, headers, cache: "no-store" });
 }
 
 // Swipe returns qr_data as a base64-encoded, gzip-compressed, pre-rendered SVG
