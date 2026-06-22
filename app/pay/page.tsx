@@ -13,6 +13,7 @@ type PaymentStatus = "PENDING" | "COMPLETED" | "CONFIRMED" | "EXPIRED" | "CANCEL
 const SUCCESS_STATUSES = new Set([
   "COMPLETED",
   "CONFIRMED",
+  "FULFILLED",
   "SUCCESS",
   "SUCCESSFUL",
   "PAID",
@@ -113,7 +114,12 @@ export default function PayPage() {
     (p: Partial<Payment> & { status?: PaymentStatus }): boolean => {
       const status = p.status;
       if (!status) return false;
-      setPayment((cur) => (cur ? { ...cur, ...p } : cur));
+      // Only update status + reference from a status check — never the QR
+      // fields (qr_data/qr_svg/short_code), or the QR would re-render/flicker
+      // on every poll. The QR is fixed once the payment is created.
+      setPayment((cur) =>
+        cur ? { ...cur, status, reference: p.reference ?? cur.reference } : cur,
+      );
       const kind = classifyStatus(status);
       if (kind === "success") {
         setStatusNote("");
@@ -277,7 +283,10 @@ export default function PayPage() {
     })
       .then(setQrSrc)
       .catch(() => setQrSrc(""));
-  }, [step, payment?.id, payment?.qr_svg, payment?.qr_emv, payment?.qr_data]);
+    // Keyed on the payment id only — the QR is rendered once per payment and
+    // must not re-run when status/reference change on a poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, payment?.id]);
 
   // Watch for payment completion by polling the payment-status endpoint
   // (GET /api/v1/payments/{id} via our proxy). The SSE stream isn't working
