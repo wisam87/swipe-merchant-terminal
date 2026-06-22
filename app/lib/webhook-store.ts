@@ -18,8 +18,12 @@ export type WebhookTxn = {
   at: number; // received time (ms epoch)
 };
 
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+// Accept either naming — Vercel's KV integration injects KV_REST_API_*, while
+// Upstash's own dashboard gives UPSTASH_REDIS_REST_*. Both expose the same
+// REST protocol this store uses.
+const KV_URL = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
+const KV_TOKEN =
+  process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
 const useKv = Boolean(KV_URL && KV_TOKEN);
 const KEY = "swipe:webhook:events";
 const MAX = 200;

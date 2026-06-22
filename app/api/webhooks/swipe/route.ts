@@ -43,16 +43,20 @@ export async function POST(req: NextRequest) {
   const timestamp = req.headers.get("webhook-timestamp") ?? "";
   const signature = req.headers.get("webhook-signature") ?? "";
 
-  const secret = process.env.SWIPE_WEBHOOK_SECRET;
+  // Prefer a dedicated Webhook HMAC key; fall back to the OAuth client secret.
+  const secret = process.env.SWIPE_WEBHOOK_SECRET ?? process.env.SWIPE_CLIENT_SECRET;
   if (secret) {
     if (!verifySignature(secret, id, timestamp, body, signature)) {
-      console.warn("[swipe webhook] signature verification FAILED");
+      console.warn(
+        "[swipe webhook] signature verification FAILED — if real webhooks keep " +
+          "getting 401s, Swipe is signing with the dedicated Webhook HMAC Key " +
+          "(Portal → Settings → API Access), not the client secret. Set " +
+          "SWIPE_WEBHOOK_SECRET to that key.",
+      );
       return new Response("invalid signature", { status: 401 });
     }
   } else {
-    console.warn(
-      "[swipe webhook] SWIPE_WEBHOOK_SECRET not set — accepting unverified (set it to enable verification)",
-    );
+    console.warn("[swipe webhook] no secret configured — accepting unverified");
   }
 
   let evt: { eventType?: string; data?: Record<string, unknown> };
