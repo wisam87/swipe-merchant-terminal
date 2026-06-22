@@ -24,16 +24,21 @@ function normalizeSse(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Arr
       if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
     }
     if (dataLines.length === 0) return;
+    const raw = dataLines.join("\n").trim();
+    if (!raw) return;
+    // The upstream may send a bare status string ("CONFIRMED"), a JSON string,
+    // or a JSON object — parse if we can, otherwise treat it as the raw status.
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(dataLines.join("\n"));
-      const { status, reference } = extractStatus(parsed);
-      if (status) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ status, reference })}\n\n`),
-        );
-      }
+      parsed = JSON.parse(raw);
     } catch {
-      /* keep-alive / comment / non-JSON frame — ignore */
+      parsed = raw;
+    }
+    const { status, reference } = extractStatus(parsed);
+    if (status) {
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ status, reference })}\n\n`),
+      );
     }
   };
 

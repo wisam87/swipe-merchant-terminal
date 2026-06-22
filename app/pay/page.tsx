@@ -5,7 +5,37 @@ import QRCode from "qrcode";
 
 type Currency = "MVR" | "USD";
 
-type PaymentStatus = "PENDING" | "COMPLETED" | "EXPIRED" | "CANCELLED";
+// The REST endpoints use COMPLETED/EXPIRED/CANCELLED; the SSE stream uses its
+// own vocabulary (e.g. CONFIRMED) and sends it as a bare string. Allow any
+// string and classify by category rather than exact match.
+type PaymentStatus = "PENDING" | "COMPLETED" | "CONFIRMED" | "EXPIRED" | "CANCELLED" | (string & {});
+
+const SUCCESS_STATUSES = new Set([
+  "COMPLETED",
+  "CONFIRMED",
+  "SUCCESS",
+  "SUCCESSFUL",
+  "PAID",
+  "SETTLED",
+]);
+const FAILED_STATUSES = new Set([
+  "EXPIRED",
+  "CANCELLED",
+  "CANCELED",
+  "FAILED",
+  "DECLINED",
+  "REJECTED",
+  "VOID",
+  "REVERSED",
+]);
+
+function classifyStatus(s?: string): "success" | "failed" | "pending" {
+  if (!s) return "pending";
+  const u = s.trim().toUpperCase();
+  if (SUCCESS_STATUSES.has(u)) return "success";
+  if (FAILED_STATUSES.has(u)) return "failed";
+  return "pending";
+}
 
 type Payment = {
   id: string;
@@ -84,12 +114,13 @@ export default function PayPage() {
       const status = p.status;
       if (!status) return false;
       setPayment((cur) => (cur ? { ...cur, ...p } : cur));
-      if (status === "COMPLETED") {
+      const kind = classifyStatus(status);
+      if (kind === "success") {
         setStatusNote("");
         goTo("success", 1);
         return true;
       }
-      if (status === "EXPIRED" || status === "CANCELLED") {
+      if (kind === "failed") {
         setError(`Payment ${status.toLowerCase()}`);
         goTo("amount", -1);
         return true;
@@ -99,19 +130,34 @@ export default function PayPage() {
     [goTo],
   );
 
-  // The transaction code to look up. The create response carries no `reference`
-  // until the customer pays, so until a stream/webhook event delivers the real
-  // one we fall back to the short_code shown on the QR screen.
-  const txnRef = payment?.reference || payment?.short_code || "";
-
-  // Manual status check — GET /api/v1/transactions/{reference}, nothing else.
+  // Manual status check. The create response carries no `reference` (the API
+  // only assigns the ST… transaction code once the payment becomes a real
+  // transaction). So we resolve the REAL reference from the payment status,
+  // then look the transaction up by it — never a substitute like short_code.
   const recheck = useCallback(async () => {
-    if (!txnRef || checking) return;
+    if (!payment?.id || checking) return;
     setChecking(true);
     setStatusNote("");
     const waiting = "Not paid yet — still waiting for the customer.";
     try {
-      const res = await fetch(`/api/transactions/${encodeURIComponent(txnRef)}`, {
+      let reference = payment.reference;
+
+      if (!reference) {
+        const pr = await fetch(`/api/payments/${payment.id}`, { cache: "no-store" });
+        const pd = await pr.json().catch(() => ({}));
+        if (!pr.ok) throw new Error(pd?.error ?? `Status check failed (${pr.status})`);
+        if (applyStatus(pd as Payment)) return; // already terminal
+        reference = (pd as Payment).reference;
+        if (reference) setPayment((cur) => (cur ? { ...cur, reference } : cur));
+      }
+
+      if (!reference) {
+        // No transaction reference assigned yet → not paid.
+        setStatusNote(waiting);
+        return;
+      }
+
+      const res = await fetch(`/api/transactions/${encodeURIComponent(reference)}`, {
         cache: "no-store",
       });
       const data = await res.json().catch(() => ({}));
@@ -130,7 +176,7 @@ export default function PayPage() {
     } finally {
       setChecking(false);
     }
-  }, [txnRef, checking, applyStatus]);
+  }, [payment?.id, payment?.reference, checking, applyStatus]);
 
   const appendDigit = useCallback((d: string) => {
     setRaw((cur) => {
@@ -238,7 +284,6 @@ export default function PayPage() {
   useEffect(() => {
     if (step !== "qr" || !payment?.id) return;
     const id = payment.id;
-    const ref = payment.reference || payment.short_code || "";
     let cancelled = false;
     let es: EventSource | null = null;
     let pollId: ReturnType<typeof setInterval> | null = null;
@@ -260,14 +305,15 @@ export default function PayPage() {
       finish({ status: d.status, reference: d.reference });
     };
 
+    // Fallback poll uses the payment status endpoint — it's the only source
+    // that returns the real `reference` (and status) before/after the customer
+    // pays. The transactions endpoint can't be used until that reference exists.
     const startPolling = () => {
-      if (pollId || cancelled || !ref) return;
+      if (pollId || cancelled) return;
       pollId = setInterval(async () => {
         try {
-          const res = await fetch(`/api/transactions/${encodeURIComponent(ref)}`, {
-            cache: "no-store",
-          });
-          if (!res.ok) return; // 404 = not paid yet
+          const res = await fetch(`/api/payments/${id}`, { cache: "no-store" });
+          if (!res.ok) return;
           finish((await res.json()) as Payment);
         } catch {
           /* swallow polling errors */
@@ -309,7 +355,7 @@ export default function PayPage() {
       cancelled = true;
       cleanup();
     };
-  }, [step, payment?.id, payment?.reference, payment?.short_code, applyStatus]);
+  }, [step, payment?.id, applyStatus]);
 
   return (
     <div className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
@@ -637,10 +683,13 @@ function QrStep({
           Waiting for customer…
         </div>
         <div className="flex flex-col items-center gap-1">
-          {(payment.reference || payment.short_code) && (
+          {payment.short_code && (
             <p className="font-mono text-xs text-zinc-500">
-              Ref · {payment.reference || payment.short_code}
+              Short code · {payment.short_code}
             </p>
+          )}
+          {payment.reference && (
+            <p className="font-mono text-xs text-zinc-500">Ref · {payment.reference}</p>
           )}
           {payment.id && (
             <p className="font-mono text-xs text-zinc-500">ID · {payment.id}</p>

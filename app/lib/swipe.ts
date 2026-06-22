@@ -129,10 +129,15 @@ function withQr(payment: PaymentResponse): PaymentResponse {
   return { ...payment, ...decodeQr(payment.qr_data) };
 }
 
-// The stream/webhook payload may be the payment object directly ({status,...})
-// or nested ({data:{status, transaction_code,...}, eventType}). Pull the status
-// and reference out of whichever shape we're handed.
+// The stream payload comes in several shapes: a bare status STRING (e.g.
+// "CONFIRMED"), the payment object directly ({status,...}), or a nested webhook
+// shape ({data:{status, transaction_code,...}, eventType}). Pull the status and
+// reference out of whichever we're handed.
 export function extractStatus(raw: unknown): { status?: string; reference?: string } {
+  if (typeof raw === "string") {
+    const status = raw.trim();
+    return status ? { status } : {};
+  }
   if (!raw || typeof raw !== "object") return {};
   const o = raw as Record<string, unknown>;
   const inner =
