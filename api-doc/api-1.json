@@ -1,0 +1,1149 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Swipe Merchants API",
+    "description": "The Swipe Merchants API enables seamless integration with the Swipe payment platform, allowing you to programmatically manage payments, check balances, view transaction history, and process payouts.\n\n## Getting Started\n\n### 1. Obtain Credentials\n\nTo get started, you'll need API credentials from the Swipe Merchant Portal:\n\n1. Log in to the [Swipe Merchant Portal](https://merchant.swipe.mv) (or sign up if you don't have an account)\n2. Navigate to **Settings** and select the **API Access** tab\n3. Click **Create** to generate a new set of API keys\n4. Securely store your `client_id` and `client_secret` — you'll need these for authentication\n\nYou can manage and revoke existing API keys anytime from the API Access page.\n\n### 2. Get an Access Token\n\nUse your credentials to obtain an access token via the OAuth2 client credentials flow:\n\n```bash\ncurl -X POST https://api.swipe.mv/oauth2/token \\\n  -d grant_type=client_credentials \\\n  -d client_id=YOUR_CLIENT_ID \\\n  -d client_secret=YOUR_CLIENT_SECRET\n```\n\nThe response will include an `access_token` that you'll use to authenticate API requests.\n\n### 3. Verify your credentials\n\nVerify your setup by checking your authenticated identity:\n\n```bash\ncurl https://api.swipe.mv/api/v1/whoami \\\n  -H \"Authorization: Bearer YOUR_ACCESS_TOKEN\"\n```\n\nYou're all set! Include the `Authorization: Bearer YOUR_ACCESS_TOKEN` header in all subsequent API requests.\n\n---\n\n**Need help?** Contact our API support team at [api-support@swipe.mv](mailto:api-support@swipe.mv)\n\n---\n\n## Webhooks\n\nSwipe can send real-time HTTP POST notifications (webhooks) to your application whenever a transaction status changes. This allows you to automate workflows like updating order status or notifying customers.\n\n### Webhook Payload\n\nWebhook events follow the [Standard Webhooks](https://www.standardwebhooks.com/) specification. See the **WebhookEvent** schema under the Models section for a full description of all fields.\n\n```json\n{\n  \"data\": {\n    \"client_id\": \"76589441-7643-42a8-a67b-465e861a33f8\",\n    \"transaction_id\": \"9759e09e-51ac-4b09-8ebe-9c2703de82e0\",\n    \"transaction_code\": \"ST261188JK8E\",\n    \"wallet_id\": \"019d4dad-2c1a-737a-8125-d5726c143688\",\n    \"type\": \"P2M\",\n    \"status\": \"COMPLETED\",\n  \"amount\": 100,\n  \"net_amount\": 99,\n  \"fee_amount\": 1,\n  \"gross_amount\": 100,\n  \"currency\": \"MVR\",\n    \"entry_type\": \"CREDIT\",\n    \"sender_vpa\": \"ibudidi@swipe\",\n    \"recipient_vpa\": \"smedigital@swipe\",\n    \"post_date\": \"2026-04-28T10:28:25+05:00\",\n    \"created_at\": \"2026-04-28T10:28:27.700728+05:00\",\n    \"updated_at\": \"2026-04-28T10:29:26.469663+05:00\"\n  },\n  \"eventType\": \"transaction.state_changed\"\n}\n```\n\n### Webhook Headers\n\nEach webhook request includes the following headers for identification and security:\n\n| Header | Description | Example |\n|--------|-------------|---------|\n| `webhook-id` | Unique identifier for the webhook event | `9759e09e-51ac-4b09-8ebe-9c2703de82e0` |\n| `webhook-timestamp` | Unix timestamp of when the webhook was sent | `1777354169` |\n| `webhook-signature` | HMAC-SHA256 signature of the payload | `v1,rDcAAmWQodKDzCSWI1gqt+0wOykO8zvs0eZ9YqSgBQ0=` |\n| `X-Webhook-Event-Type` | The type of event (e.g., `transaction.state_changed`) |\n\n### Verifying Signatures\n\nTo ensure webhooks are sent by Swipe and haven't been tampered with, you must verify the `webhook-signature` using your Webhook HMAC Key.\n\nYou can find your Webhook HMAC Key in the **Merchant Portal** under **Settings → API Access**.\n\nWe recommend using the [Standard Webhooks libraries](https://github.com/standard-webhooks/standard-webhooks/tree/main/libraries) for verification.\n",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Swipe API Support",
+      "email": "api-support@swipe.mv"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://merchant-api.swipeapp.dev",
+      "description": "Development environment"
+    },
+    {
+      "url": "https://api.swipe.mv",
+      "description": "Production environment"
+    }
+  ],
+  "paths": {
+    "/health/alive": {
+      "get": {
+        "operationId": "healthAlive",
+        "summary": "Liveness probe",
+        "description": "Returns OK if the service is running. Does not check dependencies.",
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "summary": "Readiness probe",
+        "description": "Returns OK if the service is ready to accept traffic. Checks all dependencies.",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/api/v1/balance": {
+      "get": {
+        "operationId": "getBalance",
+        "summary": "Get wallet balance",
+        "description": "Retrieve the current available and pending balance in your merchant wallet for all supported currencies (MVR, USD).",
+        "responses": {
+          "200": {
+            "description": "List of wallet balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BalanceResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "wallet:balance"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "wallet:balance"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/payments": {
+      "post": {
+        "operationId": "createPayment",
+        "summary": "Create payment",
+        "description": "Generate a new payment request with a unique short code that customers can use to complete payment through the Swipe app.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Payment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "payments:contact",
+              "payments:link",
+              "payments:qr"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "payments:contact",
+              "payments:link",
+              "payments:qr"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/payments/{paymentId}": {
+      "get": {
+        "operationId": "getPaymentStatus",
+        "summary": "Get payment status",
+        "description": "Check the current status of a payment request using its unique identifier. Use the `id` returned from the create payment endpoint.",
+        "parameters": [
+          {
+            "name": "paymentId",
+            "in": "path",
+            "description": "The payment request UUID returned when creating the payment",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "transactions:status"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "transactions:status"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/payments/{paymentId}/stream": {
+      "get": {
+        "operationId": "streamPaymentStatus",
+        "summary": "Stream payment status updates",
+        "description": "Establishes a Server-Sent Events (SSE) connection to stream real-time status updates \nfor a payment request. The connection remains open and sends events as the payment \nstatus changes (e.g., PENDING → COMPLETED).\n",
+        "parameters": [
+          {
+            "name": "paymentId",
+            "in": "path",
+            "description": "The UUID of the payment request to monitor",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream established successfully",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "description": "Server-Sent Events stream with payment status updates",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "transactions:status"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "transactions:status"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/transactions/{reference}": {
+      "get": {
+        "operationId": "getTransactionStatus",
+        "summary": "Get transaction status",
+        "description": "Check the current status of a transaction using its transaction code (e.g., TXN12345).",
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "description": "The transaction code (reference) to check",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "transactions:status"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "transactions:status"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/history": {
+      "get": {
+        "operationId": "getTransactionHistory",
+        "summary": "Get transaction history",
+        "description": "Retrieve a paginated list of all transactions associated with your merchant account, including payments, payouts, and other wallet activities.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of transactions to return per page",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Number of transactions to skip for pagination",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "transactions:history"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "transactions:history"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/payouts": {
+      "post": {
+        "operationId": "createPayout",
+        "summary": "Create payout",
+        "description": "Initiate a withdrawal from your merchant wallet to a linked bank account. Use the `bank_account_id` from the Get Bank Accounts endpoint.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePayoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Payout initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayoutResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "wallet:withdraw"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "wallet:withdraw"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/bank-accounts": {
+      "get": {
+        "operationId": "getBankAccounts",
+        "summary": "Get linked bank accounts",
+        "description": "Retrieve all bank accounts linked to your merchant wallet. Use the returned account IDs (`id` field) when creating payout requests.",
+        "responses": {
+          "200": {
+            "description": "List of linked bank accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BankAccountResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": [
+              "wallet:balance"
+            ]
+          },
+          {
+            "oauth2Prod": [
+              "wallet:balance"
+            ]
+          }
+        ],
+        "tags": [
+          "Merchant"
+        ]
+      }
+    },
+    "/api/v1/whoami": {
+      "get": {
+        "operationId": "getWhoAmI",
+        "summary": "Who am I",
+        "description": "Returns the authenticated client's identity, merchant association, and granted scopes.",
+        "responses": {
+          "200": {
+            "description": "Authenticated client context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhoAmIResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        },
+        "security": [
+          {
+            "oauth2Dev": []
+          },
+          {
+            "oauth2Prod": []
+          }
+        ],
+        "tags": [
+          "Debug"
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok",
+            "enum": [
+              "ok"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ReadinessResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok",
+            "enum": [
+              "ok",
+              "degraded",
+              "unhealthy"
+            ]
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/HealthCheck"
+              },
+              "redis": {
+                "$ref": "#/components/schemas/HealthCheck"
+              },
+              "temporal": {
+                "$ref": "#/components/schemas/HealthCheck"
+              }
+            }
+          }
+        },
+        "required": [
+          "status",
+          "checks"
+        ]
+      },
+      "HealthCheck": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unhealthy"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "WhoAmIResponse": {
+        "type": "object",
+        "properties": {
+          "client_id": {
+            "description": "The OAuth2 client ID from the token",
+            "type": "string"
+          },
+          "merchant_id": {
+            "description": "The merchant ID associated with this client",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "The scopes granted to this token",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "client_id",
+          "merchant_id"
+        ]
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "properties": {
+          "available_balance": {
+            "type": "number"
+          },
+          "pending_balance": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "available_balance",
+          "pending_balance",
+          "currency"
+        ]
+      },
+      "CreatePaymentRequest": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string",
+            "default": "MVR",
+            "enum": [
+              "MVR",
+              "USD"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "default": "QR",
+            "enum": [
+              "QR",
+              "CONTACT",
+              "LINK"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "recipient_vpa": {
+            "description": "VPA of the recipient for contact-based payment requests. Required if type is CONTACT.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount"
+        ]
+      },
+      "PaymentResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "COMPLETED",
+              "EXPIRED",
+              "CANCELLED"
+            ]
+          },
+          "reference": {
+            "description": "Transaction code for this payment. Also known as reference.",
+            "type": "string"
+          },
+          "short_code": {
+            "type": "string"
+          },
+          "qr_data": {
+            "description": "Base64 encoded EMV QR data for the payment request. Only populated if type is QR.",
+            "type": "string"
+          },
+          "payment_url": {
+            "description": "Full URL to the payment portal for this request. Only populated if type is LINK.",
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "amount",
+          "currency",
+          "status"
+        ]
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "properties": {
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionItem"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "transactions",
+          "total"
+        ]
+      },
+      "TransactionItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "gross_amount": {
+            "description": "Gross amount before fee adjustment.",
+            "type": "number"
+          },
+          "net_amount": {
+            "description": "Net amount visible to the merchant after fee adjustment.",
+            "type": "number"
+          },
+          "fee_amount": {
+            "description": "Fee amount applied to this transaction.",
+            "type": "number"
+          },
+          "original_amount": {
+            "description": "Original transaction amount before conversions or adjustments.",
+            "type": "number"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "amount",
+          "currency",
+          "status"
+        ]
+      },
+      "CreatePayoutRequest": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "bank_account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "amount",
+          "bank_account_id"
+        ]
+      },
+      "PayoutResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "description": "Unique transaction reference for checking status",
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "amount",
+          "status"
+        ]
+      },
+      "BankAccountResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Unique identifier for the bank account",
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_number": {
+            "description": "Bank account number (may be masked for security)",
+            "type": "string"
+          },
+          "account_holder_name": {
+            "description": "Name of the account holder",
+            "type": "string"
+          },
+          "currency": {
+            "description": "Currency of the bank account",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current status of the bank account",
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "SUSPENDED",
+              "CLOSED"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "account_number",
+          "account_holder_name",
+          "currency",
+          "status"
+        ]
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "description": "The type of event",
+            "type": "string",
+            "example": "transaction.state_changed"
+          },
+          "data": {
+            "$ref": "#/components/schemas/WebhookData"
+          }
+        },
+        "required": [
+          "eventType",
+          "data"
+        ]
+      },
+      "WebhookData": {
+        "type": "object",
+        "properties": {
+          "client_id": {
+            "description": "The OAuth2 client ID associated with the merchant",
+            "type": "string",
+            "format": "uuid"
+          },
+          "transaction_id": {
+            "description": "Unique internal identifier for the transaction",
+            "type": "string",
+            "format": "uuid"
+          },
+          "transaction_code": {
+            "description": "Human-readable transaction reference",
+            "type": "string"
+          },
+          "wallet_id": {
+            "description": "The merchant's wallet ID",
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "description": "Transaction type (e.g., P2M)",
+            "type": "string"
+          },
+          "status": {
+            "description": "Current status of the transaction (e.g., COMPLETED)",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Transaction amount",
+            "type": "number"
+          },
+          "net_amount": {
+            "description": "Net amount visible to the merchant after fee adjustment.",
+            "type": "number"
+          },
+          "fee_amount": {
+            "description": "Fee amount applied to this transaction.",
+            "type": "number"
+          },
+          "gross_amount": {
+            "description": "Gross amount before fee adjustment.",
+            "type": "number"
+          },
+          "currency": {
+            "description": "Currency code (e.g., MVR, USD)",
+            "type": "string"
+          },
+          "entry_type": {
+            "description": "Entry type (CREDIT/DEBIT)",
+            "type": "string"
+          },
+          "sender_vpa": {
+            "description": "VPA of the sender",
+            "type": "string"
+          },
+          "recipient_vpa": {
+            "description": "VPA of the recipient",
+            "type": "string"
+          },
+          "post_date": {
+            "description": "When the transaction was posted",
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "description": "When the transaction was created",
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "description": "When the transaction was last updated",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "transaction_code",
+          "wallet_id",
+          "status",
+          "amount",
+          "net_amount",
+          "fee_amount",
+          "gross_amount",
+          "currency"
+        ]
+      },
+      "ProblemDetails": {
+        "description": "RFC 9457 Problem Details response",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "Error type identifier",
+            "type": "string",
+            "example": "VALIDATION_ERROR"
+          },
+          "detail": {
+            "description": "Human-readable error detail",
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "FieldError": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Field name that failed validation",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the field failed validation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ]
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            },
+            "example": {
+              "type": "VALIDATION_ERROR",
+              "detail": "Request validation failed"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication required or token invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            },
+            "example": {
+              "type": "UNAUTHORIZED",
+              "detail": "Missing or invalid authentication token"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Access denied",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            },
+            "example": {
+              "type": "FORBIDDEN",
+              "detail": "Insufficient scope"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            },
+            "example": {
+              "type": "NOT_FOUND",
+              "detail": "Resource not found"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limit exceeded",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Seconds to wait before retrying"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            },
+            "example": {
+              "type": "RATE_LIMITED",
+              "detail": "Rate limit exceeded"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "oauth2Dev": {
+        "type": "oauth2",
+        "description": "OAuth2 client credentials flow for development environment.\n\nObtain your access token:\n\n```bash\ncurl -X POST https://api.swipe.mv/oauth2/token \\\n  -d grant_type=client_credentials \\\n  -d client_id=YOUR_CLIENT_ID \\\n  -d client_secret=YOUR_CLIENT_SECRET\n```\n\nInclude the returned token in the `Authorization: Bearer YOUR_ACCESS_TOKEN` header for all API requests.\n\nServer metadata is available at `/.well-known/oauth-authorization-server` (RFC 8414).\n",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://api.swipe.mv/oauth2/token",
+            "x-scalar-credentials-location": "header",
+            "scopes": {
+              "payments:link": "Generate payment links",
+              "payments:contact": "Send payment requests to contacts",
+              "payments:qr": "Generate payment QR codes",
+              "transactions:history": "List and search transactions",
+              "transactions:status": "Check status of a specific transaction",
+              "wallet:balance": "Read current wallet balance",
+              "wallet:withdraw": "Initiate withdrawals to linked accounts"
+            }
+          }
+        }
+      },
+      "oauth2Prod": {
+        "type": "oauth2",
+        "description": "OAuth2 client credentials flow for production environment.\n\nObtain your access token:\n\n```bash\ncurl -X POST https://api.swipe.mv/oauth2/token \\\n  -d grant_type=client_credentials \\\n  -d client_id=YOUR_CLIENT_ID \\\n  -d client_secret=YOUR_CLIENT_SECRET\n```\n\nInclude the returned token in the `Authorization: Bearer YOUR_ACCESS_TOKEN` header for all API requests.\n\nServer metadata is available at `/.well-known/oauth-authorization-server` (RFC 8414).\n",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://api.swipe.mv/oauth2/token",
+            "x-scalar-credentials-location": "header",
+            "scopes": {
+              "payments:link": "Generate payment links",
+              "payments:contact": "Send payment requests to contacts",
+              "payments:qr": "Generate payment QR codes",
+              "transactions:history": "List and search transactions",
+              "transactions:status": "Check status of a specific transaction",
+              "wallet:balance": "Read current wallet balance",
+              "wallet:withdraw": "Initiate withdrawals to linked accounts"
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health check endpoints"
+    },
+    {
+      "name": "Merchant",
+      "description": "Merchant-facing endpoints"
+    },
+    {
+      "name": "Debug",
+      "description": "Debug and testing endpoints"
+    },
+    {
+      "name": "Authentication",
+      "description": "Authentication endpoints"
+    }
+  ]
+}
