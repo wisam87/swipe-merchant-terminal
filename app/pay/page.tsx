@@ -2,41 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import { classifyStatus } from "@/app/lib/status";
 
 type Currency = "MVR" | "USD";
 
-// The REST endpoints use COMPLETED/EXPIRED/CANCELLED; the SSE stream uses its
-// own vocabulary (e.g. CONFIRMED) and sends it as a bare string. Allow any
-// string and classify by category rather than exact match.
+// The REST endpoints use COMPLETED/EXPIRED/CANCELLED; the stream/webhooks use
+// their own vocabulary (e.g. FULFILLED, CONFIRMED). The status vocabulary and
+// classifier are shared with the server in app/lib/status.ts.
 type PaymentStatus = "PENDING" | "COMPLETED" | "CONFIRMED" | "EXPIRED" | "CANCELLED" | (string & {});
-
-const SUCCESS_STATUSES = new Set([
-  "COMPLETED",
-  "CONFIRMED",
-  "FULFILLED",
-  "SUCCESS",
-  "SUCCESSFUL",
-  "PAID",
-  "SETTLED",
-]);
-const FAILED_STATUSES = new Set([
-  "EXPIRED",
-  "CANCELLED",
-  "CANCELED",
-  "FAILED",
-  "DECLINED",
-  "REJECTED",
-  "VOID",
-  "REVERSED",
-]);
-
-function classifyStatus(s?: string): "success" | "failed" | "pending" {
-  if (!s) return "pending";
-  const u = s.trim().toUpperCase();
-  if (SUCCESS_STATUSES.has(u)) return "success";
-  if (FAILED_STATUSES.has(u)) return "failed";
-  return "pending";
-}
 
 type Payment = {
   id: string;

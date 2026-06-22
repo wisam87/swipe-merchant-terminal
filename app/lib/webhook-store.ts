@@ -1,4 +1,5 @@
 import "server-only";
+import { isTerminal } from "@/app/lib/status";
 
 // Records transaction webhook events so the browser (which can't read Swipe's
 // GET endpoints from a datacenter IP) can learn when a payment completed.
@@ -29,7 +30,11 @@ const KEY = "swipe:webhook:events";
 const MAX = 200;
 const TTL_SECONDS = 3600;
 
-const mem: WebhookTxn[] = [];
+// Pin the in-memory fallback on globalThis so it's shared across route modules
+// and survives dev HMR (module-level state alone gets reset). This only helps a
+// single process — on Vercel's separate lambdas you still need KV (above).
+const globalForStore = globalThis as unknown as { __swipeWebhookMem?: WebhookTxn[] };
+const mem: WebhookTxn[] = (globalForStore.__swipeWebhookMem ??= []);
 
 async function kv(cmd: (string | number)[]): Promise<unknown> {
   const res = await fetch(KV_URL!, {
@@ -83,7 +88,7 @@ export async function findMatch(opts: {
   since: number;
 }): Promise<WebhookTxn | undefined> {
   const events = await recent();
-  return events.find(
+  const matches = events.filter(
     (e) =>
       e.at >= opts.since - 60_000 && // allow minor clock skew
       [e.grossAmount, e.amount].some(
@@ -91,4 +96,8 @@ export async function findMatch(opts: {
       ) &&
       (!opts.currency || !e.currency || e.currency === opts.currency),
   );
+  // Prefer a terminal event (FULFILLED/COMPLETED/CANCELLED/…) — that's the
+  // "payment done" signal — over any non-terminal same-amount event. `events`
+  // is newest-first, so .find keeps the most recent of each.
+  return matches.find((e) => isTerminal(e.status)) ?? matches[0];
 }
