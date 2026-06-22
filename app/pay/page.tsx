@@ -136,53 +136,35 @@ export default function PayPage() {
     [goTo],
   );
 
-  // Manual status check. The create response carries no `reference` (the API
-  // only assigns the ST… transaction code once the payment becomes a real
-  // transaction). So we resolve the REAL reference from the payment status,
-  // then look the transaction up by it — never a substitute like short_code.
+  // Manual status check — hits the same watch endpoint the poll uses (webhook
+  // store, with a direct-read fallback). Works on Vercel where direct Swipe
+  // reads are Cloudflare-blocked.
   const recheck = useCallback(async () => {
     if (!payment?.id || checking) return;
     setChecking(true);
     setStatusNote("");
-    const waiting = "Not paid yet — still waiting for the customer.";
     try {
-      let reference = payment.reference;
-
-      if (!reference) {
-        const pr = await fetch(`/api/payments/${payment.id}`, { cache: "no-store" });
-        const pd = await pr.json().catch(() => ({}));
-        if (!pr.ok) throw new Error(pd?.error ?? `Status check failed (${pr.status})`);
-        if (applyStatus(pd as Payment)) return; // already terminal
-        reference = (pd as Payment).reference;
-        if (reference) setPayment((cur) => (cur ? { ...cur, reference } : cur));
-      }
-
-      if (!reference) {
-        // No transaction reference assigned yet → not paid.
-        setStatusNote(waiting);
-        return;
-      }
-
-      const res = await fetch(`/api/transactions/${encodeURIComponent(reference)}`, {
-        cache: "no-store",
-      });
+      const since = payment.created_at ? Date.parse(payment.created_at) : 0;
+      const res = await fetch(
+        `/api/payments/watch?id=${encodeURIComponent(payment.id)}` +
+          `&amount=${encodeURIComponent(String(payment.amount))}` +
+          `&currency=${encodeURIComponent(payment.currency ?? "")}` +
+          `&since=${since || 0}`,
+        { cache: "no-store" },
+      );
       const data = await res.json().catch(() => ({}));
-      if (res.status === 404 || data?.status === "NOT_FOUND") {
-        setStatusNote(waiting);
-        return;
-      }
       if (!res.ok) throw new Error(data?.error ?? `Status check failed (${res.status})`);
       const terminal = applyStatus({
         status: data.status as PaymentStatus,
         reference: data.reference,
       });
-      if (!terminal) setStatusNote(waiting);
+      if (!terminal) setStatusNote("Not paid yet — still waiting for the customer.");
     } catch (e) {
       setStatusNote(e instanceof Error ? e.message : "Status check failed");
     } finally {
       setChecking(false);
     }
-  }, [payment?.id, payment?.reference, checking, applyStatus]);
+  }, [payment?.id, payment?.amount, payment?.currency, payment?.created_at, checking, applyStatus]);
 
   const appendDigit = useCallback((d: string) => {
     setRaw((cur) => {
@@ -302,9 +284,16 @@ export default function PayPage() {
       if (applyStatus(p)) cleanup();
     };
 
+    const since = payment.created_at ? Date.parse(payment.created_at) : 0;
+    const watchUrl =
+      `/api/payments/watch?id=${encodeURIComponent(id)}` +
+      `&amount=${encodeURIComponent(String(payment.amount))}` +
+      `&currency=${encodeURIComponent(payment.currency ?? "")}` +
+      `&since=${since || 0}`;
+
     const tick = async () => {
       try {
-        const res = await fetch(`/api/payments/${id}`, { cache: "no-store" });
+        const res = await fetch(watchUrl, { cache: "no-store" });
         if (!res.ok) return;
         finish((await res.json()) as Payment);
       } catch {
