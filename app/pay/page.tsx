@@ -99,33 +99,19 @@ export default function PayPage() {
     [goTo],
   );
 
-  // Manual status check — fallback for when the SSE stream can't deliver.
-  // Looks up the transaction by its reference (transaction code). The reference
-  // isn't known until the payment becomes a transaction, so bootstrap it from
-  // the payment status first when we don't have it yet.
+  // The transaction code to look up. The create response carries no `reference`
+  // until the customer pays, so until a stream/webhook event delivers the real
+  // one we fall back to the short_code shown on the QR screen.
+  const txnRef = payment?.reference || payment?.short_code || "";
+
+  // Manual status check — GET /api/v1/transactions/{reference}, nothing else.
   const recheck = useCallback(async () => {
-    if (!payment?.id || checking) return;
+    if (!txnRef || checking) return;
     setChecking(true);
     setStatusNote("");
     const waiting = "Not paid yet — still waiting for the customer.";
     try {
-      let reference = payment.reference;
-
-      if (!reference) {
-        const pr = await fetch(`/api/payments/${payment.id}`, { cache: "no-store" });
-        const pd = await pr.json().catch(() => ({}));
-        if (!pr.ok) throw new Error(pd?.error ?? `Status check failed (${pr.status})`);
-        if (applyStatus(pd as Payment)) return; // already terminal
-        reference = (pd as Payment).reference;
-        if (reference) setPayment((cur) => (cur ? { ...cur, reference } : cur));
-      }
-
-      if (!reference) {
-        setStatusNote(waiting);
-        return;
-      }
-
-      const res = await fetch(`/api/transactions/${encodeURIComponent(reference)}`, {
+      const res = await fetch(`/api/transactions/${encodeURIComponent(txnRef)}`, {
         cache: "no-store",
       });
       const data = await res.json().catch(() => ({}));
@@ -144,7 +130,7 @@ export default function PayPage() {
     } finally {
       setChecking(false);
     }
-  }, [payment?.id, payment?.reference, checking, applyStatus]);
+  }, [txnRef, checking, applyStatus]);
 
   const appendDigit = useCallback((d: string) => {
     setRaw((cur) => {
@@ -252,6 +238,7 @@ export default function PayPage() {
   useEffect(() => {
     if (step !== "qr" || !payment?.id) return;
     const id = payment.id;
+    const ref = payment.reference || payment.short_code || "";
     let cancelled = false;
     let es: EventSource | null = null;
     let pollId: ReturnType<typeof setInterval> | null = null;
@@ -274,11 +261,13 @@ export default function PayPage() {
     };
 
     const startPolling = () => {
-      if (pollId || cancelled) return;
+      if (pollId || cancelled || !ref) return;
       pollId = setInterval(async () => {
         try {
-          const res = await fetch(`/api/payments/${id}`, { cache: "no-store" });
-          if (!res.ok) return;
+          const res = await fetch(`/api/transactions/${encodeURIComponent(ref)}`, {
+            cache: "no-store",
+          });
+          if (!res.ok) return; // 404 = not paid yet
           finish((await res.json()) as Payment);
         } catch {
           /* swallow polling errors */
@@ -320,7 +309,7 @@ export default function PayPage() {
       cancelled = true;
       cleanup();
     };
-  }, [step, payment?.id, applyStatus]);
+  }, [step, payment?.id, payment?.reference, payment?.short_code, applyStatus]);
 
   return (
     <div className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
@@ -647,9 +636,16 @@ function QrStep({
           </span>
           Waiting for customer…
         </div>
-        {payment.short_code && (
-          <p className="font-mono text-xs text-zinc-500">Ref · {payment.short_code}</p>
-        )}
+        <div className="flex flex-col items-center gap-1">
+          {(payment.reference || payment.short_code) && (
+            <p className="font-mono text-xs text-zinc-500">
+              Ref · {payment.reference || payment.short_code}
+            </p>
+          )}
+          {payment.id && (
+            <p className="font-mono text-xs text-zinc-500">ID · {payment.id}</p>
+          )}
+        </div>
       </div>
 
       {note && (
