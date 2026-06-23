@@ -36,6 +36,10 @@ const TTL_SECONDS = 3600;
 const globalForStore = globalThis as unknown as { __swipeWebhookMem?: WebhookTxn[] };
 const mem: WebhookTxn[] = (globalForStore.__swipeWebhookMem ??= []);
 
+export function storeMode(): "kv" | "memory" {
+  return useKv ? "kv" : "memory";
+}
+
 async function kv(cmd: (string | number)[]): Promise<unknown> {
   const res = await fetch(KV_URL!, {
     method: "POST",
@@ -43,10 +47,13 @@ async function kv(cmd: (string | number)[]): Promise<unknown> {
       Authorization: `Bearer ${KV_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(cmd),
+    // Upstash REST wants all command args as strings.
+    body: JSON.stringify(cmd.map(String)),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`KV ${cmd[0]} failed (${res.status})`);
+  if (!res.ok) {
+    throw new Error(`KV ${cmd[0]} failed (${res.status}): ${await res.text().catch(() => "")}`);
+  }
   return ((await res.json()) as { result: unknown }).result;
 }
 
@@ -56,6 +63,13 @@ export async function recordEvent(t: WebhookTxn): Promise<void> {
     await kv(["LTRIM", KEY, 0, MAX - 1]);
     await kv(["EXPIRE", KEY, TTL_SECONDS]);
     return;
+  }
+  if (process.env.VERCEL) {
+    console.warn(
+      "[swipe webhook] storing in-memory on Vercel — the poll runs in a DIFFERENT " +
+        "lambda and will NOT see this event. Add Upstash/Vercel KV (KV_REST_API_URL " +
+        "+ KV_REST_API_TOKEN) for cross-invocation delivery.",
+    );
   }
   mem.unshift(t);
   if (mem.length > MAX) mem.length = MAX;
@@ -75,6 +89,16 @@ async function recent(): Promise<WebhookTxn[]> {
       .filter((x): x is WebhookTxn => x !== null);
   }
   return mem;
+}
+
+// For the debug endpoint — recent events without throwing.
+export async function debugRecent(): Promise<WebhookTxn[]> {
+  try {
+    return await recent();
+  } catch (e) {
+    console.error("[swipe webhook] store read failed:", e);
+    return [];
+  }
 }
 
 const EPS = 0.001;

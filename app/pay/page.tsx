@@ -281,9 +281,9 @@ export default function PayPage() {
       }
     }
 
-    // Poll immediately, then every 2.5s while the QR is shown.
+    // Poll immediately, then every 1.5s while the QR is shown.
     tick();
-    pollId = setInterval(tick, 2500);
+    pollId = setInterval(tick, 1500);
 
     // --- SSE stream (disabled until the upstream stream is fixed) -------------
     // Re-enable this block to switch from polling to live Server-Sent Events.
