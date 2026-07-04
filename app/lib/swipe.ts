@@ -18,6 +18,11 @@ export type TransactionResponse = {
   created_at?: string;
 };
 
+export type HistoryResponse = {
+  transactions: TransactionResponse[];
+  total: number;
+};
+
 export class NotFoundError extends Error {}
 
 export type PaymentResponse = {
@@ -280,6 +285,48 @@ export async function getTransaction(reference: string): Promise<TransactionResp
     throw new Error(summarizeError("Get transaction failed", res.status, text));
   }
   return (await res.json()) as TransactionResponse;
+}
+
+function mockHistory(limit: number, offset: number): HistoryResponse {
+  const total = 47;
+  const statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "PENDING", "EXPIRED", "CANCELLED"];
+  const transactions: TransactionResponse[] = [];
+  for (let i = offset; i < Math.min(offset + limit, total); i++) {
+    const gross = (((i * 37) % 900) + 100) / 100;
+    const fee = Math.round(gross) / 100;
+    const net = Math.round((gross - fee) * 100) / 100;
+    transactions.push({
+      id: `mock-txn-${i}`,
+      reference: `ST26${(174000 - i).toString(36).toUpperCase()}`,
+      amount: net,
+      gross_amount: gross,
+      net_amount: net,
+      fee_amount: fee,
+      original_amount: gross,
+      currency: i % 6 === 0 ? "USD" : "MVR",
+      type: "P2M",
+      status: statuses[i % statuses.length],
+      description: i % 3 === 0 ? "swipe-transfer" : "",
+      created_at: new Date(Date.now() - i * 5_400_000).toISOString(),
+    });
+  }
+  return { transactions, total };
+}
+
+export async function listTransactions(opts: {
+  limit: number;
+  offset: number;
+}): Promise<HistoryResponse> {
+  if (isMock()) return mockHistory(opts.limit, opts.offset);
+
+  const res = await swipeFetch(
+    `/api/v1/history?limit=${opts.limit}&offset=${opts.offset}`,
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(summarizeError("List transactions failed", res.status, text));
+  }
+  return (await res.json()) as HistoryResponse;
 }
 
 /**
