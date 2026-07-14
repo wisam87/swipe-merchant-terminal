@@ -109,22 +109,17 @@ export default function PayPage() {
     [goTo],
   );
 
-  // Manual status check — hits the same watch endpoint the poll uses (webhook
-  // store, with a direct-read fallback). Works on Vercel where direct Swipe
-  // reads are Cloudflare-blocked.
+  // Manual status check — hits Get Payment Status by UUID directly. No auto
+  // poll for now; user checks on demand. The upstream GET is Cloudflare-blocked
+  // in development, so this is expected to work on production only.
   const recheck = useCallback(async () => {
     if (!payment?.id || checking) return;
     setChecking(true);
     setStatusNote("");
     try {
-      const since = payment.created_at ? Date.parse(payment.created_at) : 0;
-      const res = await fetch(
-        `/api/payments/watch?id=${encodeURIComponent(payment.id)}` +
-          `&amount=${encodeURIComponent(String(payment.amount))}` +
-          `&currency=${encodeURIComponent(payment.currency ?? "")}` +
-          `&since=${since || 0}`,
-        { cache: "no-store" },
-      );
+      const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}`, {
+        cache: "no-store",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? `Status check failed (${res.status})`);
       const terminal = applyStatus({
@@ -137,7 +132,7 @@ export default function PayPage() {
     } finally {
       setChecking(false);
     }
-  }, [payment?.id, payment?.amount, payment?.currency, payment?.created_at, checking, applyStatus]);
+  }, [payment?.id, checking, applyStatus]);
 
   const appendDigit = useCallback((d: string) => {
     setRaw((cur) => {
@@ -243,69 +238,7 @@ export default function PayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, payment?.id]);
 
-  // Watch for payment completion by polling the payment-status endpoint
-  // (GET /api/v1/payments/{id} via our proxy). The SSE stream isn't working
-  // upstream yet, so it's commented out below and ready to re-enable later.
-  useEffect(() => {
-    if (step !== "qr" || !payment?.id) return;
-    const id = payment.id;
-    let cancelled = false;
-    let pollId: ReturnType<typeof setInterval> | null = null;
-
-    const finish = (p: Partial<Payment> & { status?: PaymentStatus }) => {
-      if (cancelled) return;
-      if (applyStatus(p)) cleanup();
-    };
-
-    const since = payment.created_at ? Date.parse(payment.created_at) : 0;
-    const watchUrl =
-      `/api/payments/watch?id=${encodeURIComponent(id)}` +
-      `&amount=${encodeURIComponent(String(payment.amount))}` +
-      `&currency=${encodeURIComponent(payment.currency ?? "")}` +
-      `&since=${since || 0}`;
-
-    const tick = async () => {
-      try {
-        const res = await fetch(watchUrl, { cache: "no-store" });
-        if (!res.ok) return;
-        finish((await res.json()) as Payment);
-      } catch {
-        /* swallow polling errors */
-      }
-    };
-
-    function cleanup() {
-      if (pollId) {
-        clearInterval(pollId);
-        pollId = null;
-      }
-    }
-
-    // Poll immediately, then every 1.5s while the QR is shown.
-    tick();
-    pollId = setInterval(tick, 1500);
-
-    // --- SSE stream (disabled until the upstream stream is fixed) -------------
-    // Re-enable this block to switch from polling to live Server-Sent Events.
-    // The proxy normalizes each frame to `{ status, reference }`.
-    //
-    // const handle = (raw: string) => {
-    //   let data: unknown;
-    //   try { data = JSON.parse(raw); } catch { return; }
-    //   const d = data as { status?: PaymentStatus; reference?: string };
-    //   finish({ status: d.status, reference: d.reference });
-    // };
-    // const es = new EventSource(`/api/payments/${id}/stream`);
-    // es.onmessage = (ev) => handle(ev.data);
-    // es.onerror = () => { if (es.readyState === EventSource.CLOSED) es.close(); };
-    // (remember to es.close() in cleanup())
-    // -------------------------------------------------------------------------
-
-    return () => {
-      cancelled = true;
-      cleanup();
-    };
-  }, [step, payment?.id, applyStatus]);
+  // No automatic status polling — the user clicks "Recheck status" to check.
 
   return (
     <div className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
