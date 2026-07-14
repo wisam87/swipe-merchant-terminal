@@ -238,7 +238,28 @@ export default function PayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, payment?.id]);
 
-  // No automatic status polling — the user clicks "Recheck status" to check.
+  // Also open the upstream SSE stream in the background. Whichever signal
+  // arrives first — stream event or manual recheck — wins via applyStatus,
+  // which no-ops after a terminal transition. Fails silently if the stream is
+  // Cloudflare-blocked; the manual button still works.
+  useEffect(() => {
+    if (step !== "qr" || !payment?.id) return;
+    const es = new EventSource(`/api/payments/${payment.id}/stream`);
+    es.onmessage = (ev) => {
+      let data: unknown;
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      const d = data as { status?: PaymentStatus; reference?: string };
+      if (applyStatus({ status: d.status, reference: d.reference })) es.close();
+    };
+    es.onerror = () => {
+      // Silent — user can still click "Recheck status".
+    };
+    return () => es.close();
+  }, [step, payment?.id, applyStatus]);
 
   return (
     <div className="relative isolate flex min-h-dvh items-center justify-center overflow-hidden bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
