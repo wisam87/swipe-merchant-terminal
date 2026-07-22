@@ -61,6 +61,7 @@ export default function PayPage() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [checking, setChecking] = useState<boolean>(false);
   const [statusNote, setStatusNote] = useState<string>("");
+  const [streamState, setStreamState] = useState<"idle" | "open" | "error">("idle");
 
   const amount = parseAmount(raw);
   const canContinue = amount > 0 && !submitting;
@@ -78,6 +79,7 @@ export default function PayPage() {
     setError("");
     setStatusNote("");
     setChecking(false);
+    setStreamState("idle");
     goTo("amount", -1);
   }, [goTo]);
 
@@ -238,13 +240,51 @@ export default function PayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, payment?.id]);
 
-  // Also open the upstream SSE stream in the background. Whichever signal
-  // arrives first — stream event or manual recheck — wins via applyStatus,
-  // which no-ops after a terminal transition. Fails silently if the stream is
-  // Cloudflare-blocked; the manual button still works.
+  // Primary: keep the upstream SSE stream open for the life of the QR step.
+  // Fallback: if the stream can't establish (Cloudflare block, upstream down),
+  // silently poll /api/payments/{id} every 3s so continuous checking still
+  // works. The manual "Recheck status" button stays as a user-driven fallback.
+  // applyStatus is a no-op after a terminal transition, so overlap is safe.
   useEffect(() => {
     if (step !== "qr" || !payment?.id) return;
-    const es = new EventSource(`/api/payments/${payment.id}/stream`);
+    const paymentId = payment.id;
+
+    const es = new EventSource(`/api/payments/${paymentId}/stream`);
+    let done = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (pollTimer || done) return;
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(
+            `/api/payments/${encodeURIComponent(paymentId)}`,
+            { cache: "no-store" },
+          );
+          if (!res.ok) return;
+          const data = (await res.json()) as {
+            status?: PaymentStatus;
+            reference?: string;
+          };
+          if (applyStatus({ status: data.status, reference: data.reference })) {
+            done = true;
+            if (pollTimer) clearInterval(pollTimer);
+            es.close();
+          }
+        } catch {
+          /* transient network error — next tick retries */
+        }
+      }, 3000);
+    };
+
+    es.onopen = () => {
+      setStreamState("open");
+      // Stream is live — stop the polling fallback if it started.
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
     es.onmessage = (ev) => {
       let data: unknown;
       try {
@@ -253,12 +293,22 @@ export default function PayPage() {
         return;
       }
       const d = data as { status?: PaymentStatus; reference?: string };
-      if (applyStatus({ status: d.status, reference: d.reference })) es.close();
+      if (applyStatus({ status: d.status, reference: d.reference })) {
+        done = true;
+        if (pollTimer) clearInterval(pollTimer);
+        es.close();
+      }
     };
     es.onerror = () => {
-      // Silent — user can still click "Recheck status".
+      setStreamState("error");
+      startPolling();
     };
-    return () => es.close();
+
+    return () => {
+      done = true;
+      if (pollTimer) clearInterval(pollTimer);
+      es.close();
+    };
   }, [step, payment?.id, applyStatus]);
 
   return (
@@ -308,6 +358,7 @@ export default function PayPage() {
                 onRecheck={recheck}
                 checking={checking}
                 note={statusNote}
+                streamState={streamState}
               />
             )}
             {step === "success" && payment && (
@@ -525,6 +576,7 @@ function QrStep({
   onRecheck,
   checking,
   note,
+  streamState,
 }: {
   payment: Payment;
   qrSrc: string;
@@ -533,7 +585,32 @@ function QrStep({
   onRecheck: () => void;
   checking: boolean;
   note: string;
+  streamState: "idle" | "open" | "error";
 }) {
+  const streamLabel =
+    streamState === "open"
+      ? "Live · listening for payment"
+      : streamState === "error"
+        ? "Auto-checking status…"
+        : "Waiting for customer…";
+  const streamTone =
+    streamState === "open"
+      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+      : streamState === "error"
+        ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+        : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300";
+  const dotOuter =
+    streamState === "open"
+      ? "bg-emerald-400"
+      : streamState === "error"
+        ? "bg-amber-400"
+        : "bg-indigo-400";
+  const dotInner =
+    streamState === "open"
+      ? "bg-emerald-500"
+      : streamState === "error"
+        ? "bg-amber-500"
+        : "bg-indigo-500";
   return (
     <div className="rounded-3xl border border-zinc-200/80 bg-white/80 p-6 shadow-xl shadow-zinc-900/5 backdrop-blur-xl sm:p-8 dark:border-zinc-800/60 dark:bg-zinc-900/60 dark:shadow-black/40">
       <div className="mb-6 text-center">
@@ -579,12 +656,18 @@ function QrStep({
       </div>
 
       <div className="mt-6 flex flex-col items-center gap-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+        <div
+          className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${streamTone}`}
+        >
           <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-indigo-500" />
+            <span
+              className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${dotOuter}`}
+            />
+            <span
+              className={`relative inline-flex h-2 w-2 rounded-full ${dotInner}`}
+            />
           </span>
-          Waiting for customer…
+          {streamLabel}
         </div>
         <div className="flex flex-col items-center gap-1">
           {payment.short_code && (
